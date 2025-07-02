@@ -1333,6 +1333,9 @@ FFmpeg command:''';
               subtitle: const Text('Pick photo or video from gallery'),
               onTap: () {
                 Navigator.pop(context);
+                if(Platform.isAndroid)
+                  _pickMediaFromGallery();
+                else
                 _pickMediaFromGallery2();
               },
             ),
