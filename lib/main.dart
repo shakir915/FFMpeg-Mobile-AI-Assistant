@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:collection/collection.dart';
 import 'package:dio/dio.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/log.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:ffmpeg_kit_flutter_new/statistics.dart';
 import 'package:ffuiflutter/getGeminiApiKey.dart';
+import 'package:ffuiflutter/words.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -43,15 +45,17 @@ enum MessageType { user, ai, file, command, output }
 class ChatMessage {
   final String id;
   final MessageType type;
-  final String content;
+   String content;
   final DateTime timestamp;
   final String? filePath;
   final String? fileName;
   final String? fileSize;
   final String? thumbnail;
   final bool isEditable;
-  final bool isProcessing;
+   bool isProcessing;
   String? outDir;
+  String? inputFileFakedPart;
+  String? inputFileFake;
 
   ChatMessage({
     required this.id,
@@ -63,25 +67,14 @@ class ChatMessage {
     this.fileSize,
     this.thumbnail,
     this.outDir,
+    this.inputFileFakedPart,
+    this.inputFileFake,
+
     this.isEditable = false,
     this.isProcessing = false,
   });
 
-  ChatMessage copyWith({String? content, bool? isEditable, bool? isProcessing, String? filePath, String? fileName, String? fileSize, String? outDir}) {
-    return ChatMessage(
-      id: id,
-      type: type,
-      outDir: outDir,
-      content: content ?? this.content,
-      timestamp: timestamp,
-      filePath: filePath ?? this.filePath,
-      fileName: fileName ?? this.fileName,
-      fileSize: fileSize ?? this.fileSize,
-      thumbnail: thumbnail,
-      isEditable: isEditable ?? this.isEditable,
-      isProcessing: isProcessing ?? this.isProcessing,
-    );
-  }
+
 
   // Convert ChatMessage to JSON
   Map<String, dynamic> toJson() {
@@ -96,8 +89,9 @@ class ChatMessage {
       'fileSize': fileSize,
       'thumbnail': thumbnail,
       'isEditable': isEditable,
+      'inputFileFakedPart': inputFileFakedPart,
+      'inputFileFake': inputFileFake,
       'isProcessing': isProcessing,
-      // Note: outDir is not serialized as Directory objects can't be easily serialized
       // You might want to store the path as a string if needed
     };
   }
@@ -114,9 +108,11 @@ class ChatMessage {
       fileSize: json['fileSize'] as String?,
       outDir: json['outDir'] as String?,
       thumbnail: json['thumbnail'] as String?,
+      inputFileFakedPart: json['inputFileFakedPart'] as String?,
+      inputFileFake: json['inputFileFake'] as String?,
+
       isEditable: json['isEditable'] as bool? ?? false,
       isProcessing: json['isProcessing'] as bool? ?? false,
-      // outDir is not restored from JSON - you'll need to handle this separately if needed
     );
   }
 
@@ -148,9 +144,12 @@ class FFmpegChatScreen extends StatefulWidget {
 
 class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
   final TextEditingController _messageController = TextEditingController();
+  final FocusNode focus1 = FocusNode();
+  final FocusNode focus2 = FocusNode();
   final ScrollController _scrollController = ScrollController();
   final List<ChatMessage> _messages = [];
   final ImagePicker _imagePicker = ImagePicker();
+  var scrollToBottomPending=false;
 
   GenerativeModel? _model;
   bool _isAIThinking = false;
@@ -162,24 +161,24 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
     super.initState();
     if(kDebugMode)
     () async {
-      final Directory docDir = await getApplicationDocumentsDirectory();
-     // await Dio().download("http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", "${docDir.path}/test.mp4");
-
-      await Future.delayed(Duration(seconds: 2));
-
-      _selectedFilePath = "${docDir.path}/test.mp4";
-      _selectedFileName = "test.mp4";
-      _addMessage(ChatMessage(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        type: MessageType.file,
-        content: "File selected",
-        timestamp: DateTime.now(),
-        filePath: "${docDir.path}/test.mp4",
-        fileName: "test.mp4",
-        fileSize: "${100} MB",
-      ));
-
-      print("DioDioDioDioDio");
+     //  final Directory docDir = await getApplicationDocumentsDirectory();
+     // // await Dio().download("http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", "${docDir.path}/test.mp4");
+     //
+     //  await Future.delayed(Duration(seconds: 2));
+     //
+     //  _selectedFilePath = "${docDir.path}/test.mp4";
+     //  _selectedFileName = "test.mp4";
+     //  _addMessage(ChatMessage(
+     //    id: DateTime.now().millisecondsSinceEpoch.toString(),
+     //    type: MessageType.file,
+     //    content: "File selected",
+     //    timestamp: DateTime.now(),
+     //    filePath: "${docDir.path}/test.mp4",
+     //    fileName: "test.mp4",
+     //    fileSize: "${100} MB",
+     //  ));
+     //
+     //  print("DioDioDioDioDio");
     }.call();
     _initializeGemini();
   }
@@ -187,7 +186,7 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
   Future<void> _initializeGemini() async {
     try {
       final Directory docDir = await getApplicationDocumentsDirectory();
-      var file = File(docDir.path + "/chatV3.json");
+      var file = File(docDir.path + "/chatV5.json");
       print("_addWelcomeMessage old ${await file.readAsString()}");
 
       print(file.readAsStringSync());
@@ -196,6 +195,7 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
           .map((json) => ChatMessage.fromJson(json as Map<String, dynamic>))
           .toList()
           .cast<ChatMessage>(); // Add this cast
+      messages.forEach((m)=>m.isProcessing=false);
       _messages.addAll(messages);
     } catch (e, s) {
       print(e);
@@ -209,7 +209,7 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
         ChatMessage(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           type: MessageType.ai,
-          content: "🤖 AI initialized! I can help you create FFmpeg commands.",
+          content: aiInitialized,
           timestamp: DateTime.now(),
         ),
       );
@@ -218,7 +218,7 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
           id: 'welcome',
           type: MessageType.ai,
           content:
-          "👋 Welcome! Select a file and tell me what you'd like to do with it. I'll generate the FFmpeg command for you!\nexample : convert the video to MP3 audio",
+          welcome,
           timestamp: DateTime.now(),
         ),
       );
@@ -240,19 +240,19 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
 
   Future<void> _addMessage(ChatMessage message,{dontScrolls=false,save=false}) async {
     setState(() {
+      scrollToBottomPending=true;
       _messages.add(message);
     });
-    if(!dontScrolls) {
-      await waitForBuildIfPending();
-      _scrollToBottom();
-    }
-    if(save)
+
+    // if(save)
     try {
       if (_messages.isNotEmpty) {
         final Directory docDir = await getApplicationDocumentsDirectory();
-        File(docDir.path + "/chatV3.json").writeAsString(jsonEncode(_messages.where((m)=>m.type==MessageType.output).map((m) => m.toJson()).toList())).then((a) {
+        File(docDir.path + "/chatV5.json").writeAsString(jsonEncode(_messages.where((m)=>
+        m.content!=welcome&&m.content!=aiInitialized&&m.content!=pleaseSelectFiles&&m.content!=noFileSelected
+        ).map((m) => m.toJson()).toList())).then((a) {
           print("after write : readed ");
-          print(File(docDir.path + "/chatV3.json").readAsStringSync());
+          print(File(docDir.path + "/chatV5.json").readAsStringSync());
         });
       }
     } catch (e, s) {
@@ -285,7 +285,7 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
         ChatMessage(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           type: MessageType.ai,
-          content: "Please select a file first using the file picker buttons below! 📎",
+          content: pleaseSelectFiles,
           timestamp: DateTime.now(),
         ),
       );
@@ -315,11 +315,9 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
 
     _addMessage(ChatMessage(id: 'thinking', type: MessageType.ai, content: "🤔 Thinking...", timestamp: DateTime.now()));
 
-    final Directory docDir = await getApplicationDocumentsDirectory();
-    final Directory outDir = Directory('${docDir.path}/${DateTime.now().millisecondsSinceEpoch}');
-    if (!outDir.existsSync()) {
-      outDir.createSync(recursive: true);
-    }
+
+
+    var outDir=await createNewOutDir();
 
     try {
       String prompt =
@@ -328,9 +326,9 @@ Generate an FFmpeg command based on this request: "$userPrompt"
 
 Rules:
 1. Use "\"$_selectedFilePath\"" as input filename (will be replaced with actual path)
-2. use output file directory as \"${outDir.absolute}\"
+2. use output file directory as \"${outDir}\"
 3. Use appropriate output filename with correct extension
-4. Keep commands concise and practical no explanations needed, only command, no ffmpeg at first, it is for programmatical execution in mobile side , don't use /usr/bin/ or bash like thing on start, only the command for ffmpeg required 
+4. Keep commands concise and practical no explanations needed, only command,  it is for programmatical execution  , don't use /usr/bin/ or bash like thing on start, only the command for ffmpeg required 
 
 
 
@@ -355,7 +353,9 @@ FFmpeg command:''';
             type: MessageType.command,
             content: generatedCommand,
             timestamp: DateTime.now(),
-            outDir: outDir?.path,
+            outDir: outDir,
+            inputFileFake: "input_file.${getExtension(_selectedFilePath)}",
+            inputFileFakedPart: _selectedFilePath,
             isEditable: true,
           ),
         );
@@ -412,69 +412,7 @@ FFmpeg command:''';
     }
   }
 
-  Future<void> _pickMediaFromGallery() async {
-    try {
-      final XFile? pickedFile = await _imagePicker.pickVideo(source: ImageSource.gallery, maxDuration: const Duration(minutes: 10));
 
-      if (pickedFile != null) {
-        final file = File(pickedFile.path);
-        final fileSize = await file.length();
-        final fileSizeInMB = (fileSize / (1024 * 1024)).toStringAsFixed(2);
-
-        setState(() {
-          _selectedFilePath = pickedFile.path;
-          _selectedFileName = pickedFile.path.split('/').last;
-        });
-
-        _addMessage(
-          ChatMessage(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
-            type: MessageType.file,
-            content: "Video selected from gallery",
-            timestamp: DateTime.now(),
-            filePath: pickedFile.path,
-            fileName: pickedFile.path.split('/').last,
-            fileSize: "${fileSizeInMB} MB",
-          ),
-        );
-      }
-    } catch (e) {
-      try {
-        final XFile? imageFile = await _imagePicker.pickImage(source: ImageSource.gallery);
-        if (imageFile != null) {
-          final file = File(imageFile.path);
-          final fileSize = await file.length();
-          final fileSizeInMB = (fileSize / (1024 * 1024)).toStringAsFixed(2);
-
-          setState(() {
-            _selectedFilePath = imageFile.path;
-            _selectedFileName = imageFile.path.split('/').last;
-          });
-
-          _addMessage(
-            ChatMessage(
-              id: DateTime.now().millisecondsSinceEpoch.toString(),
-              type: MessageType.file,
-              content: "Image selected from gallery",
-              timestamp: DateTime.now(),
-              filePath: imageFile.path,
-              fileName: imageFile.path.split('/').last,
-              fileSize: "${fileSizeInMB} MB",
-            ),
-          );
-        }
-      } catch (e2) {
-        _addMessage(
-          ChatMessage(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
-            type: MessageType.ai,
-            content: "Error picking from gallery: $e2",
-            timestamp: DateTime.now(),
-          ),
-        );
-      }
-    }
-  }
 
   Future<void> _pickMediaFromCamera() async {
     try {
@@ -540,32 +478,54 @@ FFmpeg command:''';
     }
   }
 
-  Future<void> _executeFFmpegCommand(String command, String messageId, String? outDir) async {
+  Future<void> _executeFFmpegCommand(ChatMessage chat) async {
+
+    setState(() {
+      editing=null;
+    });
+
     ChatMessage? statusMessage;
     ChatMessage? logMesaage;
 
-    if (_selectedFilePath == null) {
-      _addMessage(
-        ChatMessage(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          type: MessageType.ai,
-          content: "No file selected to process!",
-          timestamp: DateTime.now(),
-        ),
-      );
-      return;
+    if(chat?.content?.trim()?.isNotEmpty!=true) return;
+
+    print(chat.toJson());
+    print("newOtDir old ${chat.outDir}");
+    if(await Directory(chat.outDir!)!.list()!.length!>0){
+      print("newOtDir newOtDir");
+      var newOtDir= await createNewOutDir();
+      chat.content=chat.content!.replaceAll(chat.outDir!, newOtDir!);
+      chat.outDir=newOtDir;
     }
 
+
+
+    // if (_selectedFilePath == null) {
+    //   _addMessage(
+    //     ChatMessage(
+    //       id: DateTime.now().millisecondsSinceEpoch.toString(),
+    //       type: MessageType.ai,
+    //       content: noFileSelected,
+    //       timestamp: DateTime.now(),
+    //     ),
+    //   );
+    //   return;
+    // }
+
     setState(() {
-      final messageIndex = _messages.indexWhere((msg) => msg.id == messageId);
-      if (messageIndex != -1) {
-        _messages[messageIndex] = _messages[messageIndex].copyWith(isProcessing: true);
-      }
+      chat.isProcessing=true;
     });
 
     try {
-      print("command $command");
 
+
+      var command=chat.content.trim();
+      print("command ${command.startsWith("ffmpeg ")}");
+      print("command ${command}");
+      if(command.startsWith("ffmpeg ")){
+        command=command.replaceFirst("ffmpeg ", "");
+      }
+      print("command ${command}");
       await FFmpegKit.executeAsync(
         command,
         (session) async {
@@ -573,13 +533,12 @@ FFmpeg command:''';
           if (ReturnCode.isSuccess(returnCode)) {
             setState(() {
               if (statusMessage != null) _messages.remove(statusMessage);
-              final messageIndex = _messages.indexWhere((msg) => msg.id == messageId);
-              if (messageIndex != -1) {
-                _messages[messageIndex] = _messages[messageIndex].copyWith(isProcessing: false);
-              }
-              _showOutputFile(outDir!);
+              if (logMesaage != null) _messages.remove(logMesaage);
+              chat.isProcessing = false;
+              _showOutputFile(chat!.outDir!);
             });
           } else if (ReturnCode.isCancel(returnCode)) {
+            chat.isProcessing = false;
             _addMessage(
               ChatMessage(
                 id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -602,40 +561,37 @@ FFmpeg command:''';
             );
             _addMessage(logMesaage!);
           } else {
-            logMesaage = logMesaage?.copyWith(content: lcb.getMessage());
+            logMesaage?.content= lcb.getMessage();
             setState(() {});
           }
         },
         (Statistics statistics) {
-          print("Statistics ${statistics.toString()}");
-          final timeInMilliseconds = statistics.getTime();
-          final speed = statistics.getSpeed();
-          final videoFrameNumber = statistics.getVideoFrameNumber();
-          final videoFps = statistics.getVideoFps();
-          final bitrate = statistics.getBitrate();
-          final size = statistics.getSize();
-          if (statusMessage == null) {
-            statusMessage = ChatMessage(
-              id: DateTime.now().millisecondsSinceEpoch.toString(),
-              type: MessageType.ai,
-              content: "$timeInMilliseconds ms, $speed x, ${(size / (1000 * 1000)).toStringAsFixed(1)} MB, $videoFrameNumber, ${videoFps}fps, $bitrate",
-              timestamp: DateTime.now(),
-            );
-            _addMessage(statusMessage!);
-          } else {
-            statusMessage = statusMessage?.copyWith(
-              content: "$timeInMilliseconds ms, $speed x, ${(size / (1000 * 1000)).toStringAsFixed(1)} MB, $videoFrameNumber, ${videoFps}fps, $bitrate",
-            );
-            setState(() {});
-          }
+          // print("Statistics ${statistics.toString()}");
+          // final timeInMilliseconds = statistics.getTime();
+          // final speed = statistics.getSpeed();
+          // final videoFrameNumber = statistics.getVideoFrameNumber();
+          // final videoFps = statistics.getVideoFps();
+          // final bitrate = statistics.getBitrate();
+          // final size = statistics.getSize();
+          // if (statusMessage == null) {
+          //   statusMessage = ChatMessage(
+          //     id: DateTime.now().millisecondsSinceEpoch.toString(),
+          //     type: MessageType.ai,
+          //     content: "$timeInMilliseconds ms, $speed x, ${(size / (1000 * 1000)).toStringAsFixed(1)} MB, $videoFrameNumber, ${videoFps}fps, $bitrate",
+          //     timestamp: DateTime.now(),
+          //   );
+          //   _addMessage(statusMessage!);
+          // } else {
+          //   statusMessage = statusMessage?.copyWith(
+          //     content: "$timeInMilliseconds ms, $speed x, ${(size / (1000 * 1000)).toStringAsFixed(1)} MB, $videoFrameNumber, ${videoFps}fps, $bitrate",
+          //   );
+          //   setState(() {});
+          // }
         },
       );
     } catch (e) {
       setState(() {
-        final messageIndex = _messages.indexWhere((msg) => msg.id == messageId);
-        if (messageIndex != -1) {
-          _messages[messageIndex] = _messages[messageIndex].copyWith(isProcessing: false);
-        }
+        chat.isProcessing=false;
       });
       _addMessage(ChatMessage(id: DateTime.now().millisecondsSinceEpoch.toString(), type: MessageType.ai, content: "Error: $e", timestamp: DateTime.now()));
     }
@@ -677,23 +633,16 @@ FFmpeg command:''';
     }
   }
 
-  void _updateCommandMessage(String messageId, String newCommand) {
-    setState(() {
-      final messageIndex = _messages.indexWhere((msg) => msg.id == messageId);
-      if (messageIndex != -1) {
-        _messages[messageIndex] = _messages[messageIndex].copyWith(content: newCommand);
-      }
-    });
-  }
 
   var scrolledUp = false;
 
   @override
   Widget build(BuildContext context) {
-    _checkAndScrollToBottom();
+    if(scrollToBottomPending)
+     _checkAndScrollToBottom();
     print("bottom ${MediaQuery.of(context).viewInsets.bottom}");
     print("bottom ${MediaQuery.of(context).padding.bottom}");
-    if (MediaQuery.of(context).viewInsets.bottom > 100 && !scrolledUp) {
+    if (MediaQuery.of(context).viewInsets.bottom > 50 && !scrolledUp) {
       () async {
         await waitForBuildIfPending();
         if (mounted) {
@@ -707,6 +656,9 @@ FFmpeg command:''';
 
     return GestureDetector(
       onTap: () {
+        setState(() {
+        editing=null;
+        });
         FocusScope.of(context).unfocus();
       },
       child: Scaffold(
@@ -714,7 +666,7 @@ FFmpeg command:''';
           title: const Text('FFMpeg AI Assistant'),
           centerTitle: true,
           actions: [
-            if(totalSizeOfDir>(10*1000*1000))
+
             Padding(
               padding: const EdgeInsets.only(right: 8.0),
               child: TextButton.icon(
@@ -722,9 +674,9 @@ FFmpeg command:''';
                     deleteDialog();
 
                 },
-                icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                icon: const Icon(Icons.delete_outline, color: Colors.red, size: 25),
                 label:  Text(
-                  '${formatBytes(totalSizeOfDir)}',
+                  totalSizeOfDir>(10*1000*1000) ? '${formatBytes(totalSizeOfDir)}' : "",
                   style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.w500),
                 ),
                 style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: const Size(60, 32)),
@@ -744,7 +696,13 @@ FFmpeg command:''';
                 },
               ),
             ),
+
+            if(editing!=null)
+              commandInput(editing!)
+            else if(MediaQuery.of(context).viewInsets.bottom < 50||focus1.hasFocus)
             _buildChatInput(),
+
+
           ],
         ),
       ),
@@ -760,9 +718,9 @@ FFmpeg command:''';
       case MessageType.file:
         return _buildFileMessage(message);
       case MessageType.command:
-        return _buildCommandMessage(message);
+        return _buildCommandMessage5(message);
       case MessageType.output:
-        return _buildOutputMessage(message);
+        return _buildOutputMessage4(message);
     }
   }
 
@@ -810,10 +768,22 @@ FFmpeg command:''';
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      message.fileName ?? 'Unknown file',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                      overflow: TextOverflow.ellipsis,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                           getFileNameWithoutExtension( message.fileName) ,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                        Text(
+                          "."+getExtension( message.fileName) ,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      ],
                     ),
                     Text(message.fileSize ?? '', style: TextStyle(color: Colors.grey[400])),
                   ],
@@ -826,7 +796,7 @@ FFmpeg command:''';
     );
   }
 
-  Widget _buildCommandMessage(ChatMessage message) {
+/*  Widget _buildCommandMessage0(ChatMessage message) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       child: Card(
@@ -871,9 +841,230 @@ FFmpeg command:''';
         ),
       ),
     );
-  }
+  }*/
 
-  Widget _buildOutputMessage(ChatMessage message) {
+/*  Widget _buildCommandMessage1(ChatMessage message) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Card(
+        color: const Color(0xFF1E293B), // Slate-800
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.terminal, color: const Color(0xFF60A5FA)), // Blue-400
+                  const SizedBox(width: 8),
+                  const Text('FFmpeg Command',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF60A5FA), // Blue-400
+                      )
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                initialValue: message.content,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: Colors.white,
+                ),
+                maxLines: null,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF374151)), // Gray-700
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF374151)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF60A5FA)),
+                  ),
+                  filled: true,
+                  fillColor: Color(0xFF111827), // Gray-900
+                ),
+                onChanged: (value) => _updateCommandMessage(message.id, value),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: message.isProcessing ? null : () => _executeFFmpegCommand(message.content, message.id, message.outDir),
+                      icon: message.isProcessing
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.play_arrow, color: Colors.white),
+                      label: Text(
+                        message.isProcessing ? 'Processing...' : 'Run Command',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF3B82F6), // Blue-500
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }*/
+
+
+/*  Widget _buildCommandMessage2(ChatMessage message) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Card(
+        color: const Color(0xFF1F1B2E), // Dark purple
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.terminal, color: const Color(0xFFA855F7)), // Purple-500
+                  const SizedBox(width: 8),
+                  const Text('FFmpeg Command',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFA855F7),
+                      )
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                initialValue: message.content,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: Colors.white,
+                ),
+                maxLines: null,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF4C1D95)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF4C1D95)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFFA855F7)),
+                  ),
+                  filled: true,
+                  fillColor: Color(0xFF0F0A1A),
+                ),
+                onChanged: (value) => _updateCommandMessage(message.id, value),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: message.isProcessing ? null : () => _executeFFmpegCommand(message.content, message.id, message.outDir),
+                      icon: message.isProcessing
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.play_arrow, color: Colors.white),
+                      label: Text(
+                        message.isProcessing ? 'Processing...' : 'Run Command',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF8B5CF6), // Purple-500
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }*/
+
+
+/*  Widget _buildCommandMessage3(ChatMessage message) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Card(
+        color: const Color(0xFF0A0F0D), // Very dark green
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.terminal, color: const Color(0xFF00FF88)), // Bright green
+                  const SizedBox(width: 8),
+                  const Text('FFmpeg Command',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF00FF88),
+                      )
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                initialValue: message.content,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: Color(0xFF00FF88),
+                ),
+                maxLines: null,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF1A2A1F)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF1A2A1F)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF00FF88)),
+                  ),
+                  filled: true,
+                  fillColor: Color(0xFF000000),
+                ),
+                onChanged: (value) => _updateCommandMessage(message.id, value),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: message.isProcessing ? null : () => _executeFFmpegCommand(message.content, message.id, message.outDir),
+                      icon: message.isProcessing
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                          : const Icon(Icons.play_arrow, color: Colors.black),
+                      label: Text(
+                        message.isProcessing ? 'Processing...' : 'Run Command',
+                        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00FF88),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }*/
+
+  Widget _buildOutputMessage4(ChatMessage message) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       child: Card(
@@ -904,10 +1095,21 @@ FFmpeg command:''';
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          message.fileName ?? 'Output file',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                          overflow: TextOverflow.ellipsis,
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                               getFileNameWithoutExtension( message.fileName) ,
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Text(
+                              "."+getExtension( message.fileName) ,
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                              overflow: TextOverflow.ellipsis,
+                            )
+                          ],
                         ),
                         Text(message.fileSize ?? '', style: TextStyle(color: Colors.grey[400])),
                       ],
@@ -918,6 +1120,168 @@ FFmpeg command:''';
                     icon: const Icon(Icons.share, color: Colors.white),
                     label: const Text('Share', style: TextStyle(color: Colors.white)),
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  ChatMessage? editing;
+
+  Widget _buildCommandMessage5(ChatMessage message) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Card(
+        color: const Color(0xFF2D3748), // Gray-700
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.terminal, color: const Color(0xFF68D391)), // Green-300
+                  const SizedBox(width: 8),
+                  const Text('FFmpeg Command',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      )
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              InkWell(
+                onTap: () async {
+                  setState(() {
+                    editing=message;
+                  });
+                  await waitForBuildIfPending();
+                  focus2.requestFocus();
+                },
+                child: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    border: Border.all(color:  Color(0xFF4A5568),width: 1),
+
+                    color: Color(0xFF1A202C),
+                  ),
+                  child: Text(
+                  message.content
+                        ?.replaceFirst(message.inputFileFakedPart!, message.inputFileFake!)
+                        ?.replaceFirst(message.outDir!, "output_dir")??""
+                    ,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      color: Colors.white,
+                    ),
+                    maxLines: 100,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: message.isProcessing ? null : () => _executeFFmpegCommand(message),
+                      icon: message.isProcessing
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.play_arrow, color: Colors.white),
+                      label: Text(
+                        message.isProcessing ? 'Processing...' : 'Run Command',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFBB4878), // Green-500
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget commandInput(ChatMessage message) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Card(
+        color: const Color(0xFF2D3748), // Gray-700
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.terminal, color: const Color(0xFF68D391)), // Green-300
+                  const SizedBox(width: 8),
+                  const Text('FFmpeg Command',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      )
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                initialValue: message.content
+                    ?.replaceFirst(message.inputFileFakedPart!, message.inputFileFake!)
+                    ?.replaceFirst(message.outDir!, "output_dir")
+                ,
+                focusNode: focus2,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: Colors.white,
+                ),
+                maxLines: null,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF4A5568)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF4A5568)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF68D391)),
+                  ),
+                  filled: true,
+                  fillColor: Color(0xFF1A202C),
+                ),
+                onChanged: (value) {
+                  message.content=value
+                      .replaceFirst(message.inputFileFake!, message.inputFileFakedPart!)
+                      .replaceFirst("output_dir", message.outDir!);
+                },
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: message.isProcessing ? null : () => _executeFFmpegCommand(message),
+                      icon: message.isProcessing
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.play_arrow, color: Colors.white),
+                      label: Text(
+                        message.isProcessing ? 'Processing...' : 'Run Command',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFBB4878), // Green-500
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -969,9 +1333,10 @@ FFmpeg command:''';
               subtitle: const Text('Pick photo or video from gallery'),
               onTap: () {
                 Navigator.pop(context);
-                _pickMediaFromGallery();
+                _pickMediaFromGallery2();
               },
             ),
+
             ListTile(
               leading: Container(
                 padding: const EdgeInsets.all(8),
@@ -1012,6 +1377,7 @@ FFmpeg command:''';
             Expanded(
               child: TextField(
                 controller: _messageController,
+                focusNode: focus1,
                 decoration: InputDecoration(
                   hintText: 'Type your message...',
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(25), borderSide: BorderSide.none),
@@ -1124,7 +1490,7 @@ FFmpeg command:''';
                 children: [
                   Icon(Icons.storage_outlined, color: Colors.orange, size: 20),
                   SizedBox(width: 8),
-                  Text('${formatBytes(totalSizeOfDir)} of storage ', style: TextStyle(color: Colors.grey[300])),
+                  Text('${formatBytes(totalSizeOfDir)} of app storage ', style: TextStyle(color: Colors.grey[300])),
                 ],
               ),
               SizedBox(height: 16),
@@ -1186,26 +1552,141 @@ FFmpeg command:''';
     );
   }
 
-  var last_maxScrollExtent=0.0;
+
 
   Future<void> _checkAndScrollToBottom() async {
     await waitForBuildIfPending();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         final maxScrollExtent = _scrollController.position.maxScrollExtent;
-
-        if (maxScrollExtent>last_maxScrollExtent) {
           _scrollController.animateTo(
             maxScrollExtent,
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOut,
           );
-        }
-        last_maxScrollExtent=maxScrollExtent;
+        scrollToBottomPending=false;
       }
     });
   }
 
+
+
+  Future<void> _pickMediaFromGallery() async {
+    try {
+      final XFile? pickedFile = await _imagePicker.pickVideo(source: ImageSource.gallery, maxDuration: const Duration(minutes: 10));
+
+      if (pickedFile != null) {
+        final file = File(pickedFile.path);
+        final fileSize = await file.length();
+        final fileSizeInMB = (fileSize / (1024 * 1024)).toStringAsFixed(2);
+
+        setState(() {
+          _selectedFilePath = pickedFile.path;
+          _selectedFileName = pickedFile.path.split('/').last;
+        });
+
+        _addMessage(
+          ChatMessage(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            type: MessageType.file,
+            content: "Video selected from gallery",
+            timestamp: DateTime.now(),
+            filePath: pickedFile.path,
+            fileName: pickedFile.path.split('/').last,
+            fileSize: "${fileSizeInMB} MB",
+          ),
+        );
+      }
+    } catch (e) {
+      try {
+        final XFile? imageFile = await _imagePicker.pickImage(source: ImageSource.gallery);
+        if (imageFile != null) {
+          final file = File(imageFile.path);
+          final fileSize = await file.length();
+          final fileSizeInMB = (fileSize / (1024 * 1024)).toStringAsFixed(2);
+
+          setState(() {
+            _selectedFilePath = imageFile.path;
+            _selectedFileName = imageFile.path.split('/').last;
+          });
+
+          _addMessage(
+            ChatMessage(
+              id: DateTime.now().millisecondsSinceEpoch.toString(),
+              type: MessageType.file,
+              content: "Image selected from gallery",
+              timestamp: DateTime.now(),
+              filePath: imageFile.path,
+              fileName: imageFile.path.split('/').last,
+              fileSize: "${fileSizeInMB} MB",
+            ),
+          );
+        }
+      } catch (e2) {
+        _addMessage(
+          ChatMessage(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            type: MessageType.ai,
+            content: "Error picking from gallery: $e2",
+            timestamp: DateTime.now(),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _pickMediaFromGallery2() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.media,
+        allowMultiple: false,
+        allowCompression: false, // This helps prevent compression
+      );
+
+      if (result != null) {
+        final file = File(result.files.single.path!);
+        final fileSize = await file.length();
+        final fileSizeInMB = (fileSize / (1024 * 1024)).toStringAsFixed(2);
+
+        setState(() {
+          _selectedFilePath = result.files.single.path!;
+          _selectedFileName = result.files.single.name;
+        });
+
+        _addMessage(
+          ChatMessage(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            type: MessageType.file,
+            content: "Media selected from gallery (uncompressed)",
+            timestamp: DateTime.now(),
+            filePath: result.files.single.path!,
+            fileName: result.files.single.name,
+            fileSize: "${fileSizeInMB} MB",
+          ),
+        );
+      }
+    } catch (e) {
+      _addMessage(
+        ChatMessage(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          type: MessageType.ai,
+          content: "Error picking from gallery: $e",
+          timestamp: DateTime.now(),
+        ),
+      );
+    }
+  }
+
+
+
+  Future<String> createNewOutDir() async {
+    final Directory docDir = await getApplicationDocumentsDirectory();
+    final Directory outDir = Directory('${docDir.path}/${DateTime.now().millisecondsSinceEpoch}');
+    if (!outDir.existsSync()) {
+      outDir.createSync(recursive: true);
+    }
+    return outDir.path;
+  }
 
 
 }
@@ -1220,4 +1701,30 @@ Future<void> waitForBuildIfPending() async {
   }
   // Already built, no need to wait
   return;
+}
+
+
+String getExtension(String? fileName) {
+  if (fileName == null || fileName.trim().isEmpty) return '';
+
+  final trimmedName = fileName.trim();
+  final lastDotIndex = trimmedName.lastIndexOf('.');
+
+  // No dot found or dot is at the beginning/end
+  if (lastDotIndex <= 0 || lastDotIndex >= trimmedName.length - 1) {
+    return '';
+  }
+
+  return trimmedName.substring(lastDotIndex + 1).toLowerCase();
+}
+
+String getFileNameWithoutExtension(String? fileName) {
+  if (fileName == null || fileName.trim().isEmpty) return '';
+
+  final trimmedName = fileName.trim();
+  final lastDotIndex = trimmedName.lastIndexOf('.');
+
+  if (lastDotIndex <= 0) return trimmedName;
+
+  return trimmedName.substring(0, lastDotIndex);
 }
