@@ -1,5 +1,9 @@
 # FFMpeg-Mobile-AI-Assistant
 
+https://apps.apple.com/us/app/ffmpeg-ai-assistant/id6748019690
+
+https://play.google.com/store/apps/details?id=shakir.kadakkadan.ffuiflutter
+
 Screenshots
 <div align="center">
   <img src="https://github.com/user-attachments/assets/0004cc41-6c26-4311-b9c1-8679c3245c15" width="200" alt="Home Screen"/>
