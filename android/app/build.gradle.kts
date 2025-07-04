@@ -19,7 +19,9 @@ android {
 
     namespace = "shakir.kadakkadan.ffuiflutter"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+//    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973" //ffmpeg_kit_flutter_android requires Android NDK 27.0.12077973
+
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
