@@ -45,27 +45,33 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
   void initState() {
     super.initState();
     downloadBucksBunny();
-    _initializeGemini();
+    loadOldChatsAnd_initializeGemini();
   }
 
-  Future<void> _initializeGemini() async {
+
+  Future<void> loadOldChatsAnd_initializeGemini() async {
     try {
       final Directory docDir = await getApplicationDocumentsDirectory();
       var file = File(docDir.path + "/chatV5.json");
       print("_addWelcomeMessage old ${await file.readAsString()}");
 
-      print(file.readAsStringSync());
-      var jsonList = jsonDecode(await file.readAsString());
-      final List<ChatMessage> messages = jsonList
-          .map((json) => ChatMessage.fromJson(json as Map<String, dynamic>))
-          .toList()
-          .cast<ChatMessage>(); // Add this cast
-      messages.forEach((m) => m.isProcessing = false);
-      _messages.addAll(messages);
+    print(file.readAsStringSync());
+    var jsonList = jsonDecode(await file.readAsString());
+    final List<ChatMessage> messages = jsonList
+        .map((json) => ChatMessage.fromJson(json as Map<String, dynamic>))
+        .toList()
+        .cast<ChatMessage>(); // Add this cast
+    messages.forEach((m) => m.isProcessing = false);
+    _messages.addAll(messages);
     } catch (e, s) {
-      print(e);
-      print(s);
+    print(e);
+    print(s);
     }
+    _initializeGemini();
+  }
+
+  Future<void> _initializeGemini() async {
+
 
     try {
       _model = GenerativeModel(model: "gemini-2.0-flash", apiKey: getGeminiApiKey());
@@ -256,6 +262,7 @@ FFmpeg command:''';
           timestamp: DateTime.now(),
         ),
       );
+      _initializeGemini();
     } finally {
       setState(() {
         _isAIThinking = false;
@@ -406,6 +413,7 @@ FFmpeg command:''';
       print("commandcommandcommand pathFakes\n${chat.pathFakes?.join("\n")}");
       print("commandcommandcommand pathOriginal\n${chat.pathOriginal?.join("\n")}");
       print("commandcommandcommand ${command}");
+      var endSession=false;
       await FFmpegKit.executeAsync(
         command,
         (session) async {
@@ -422,9 +430,7 @@ FFmpeg command:''';
           } else if (await session.getState() == SessionState.completed || await session.getState() == SessionState.failed) {
             chat.isProcessing = false;
             Future.delayed(Duration(seconds: 1)).then((a) async {
-
-              _generateAICommand(command, logMesaage?.logs,retry,chat.outDir);
-
+              _generateAICommand(command, logMesaage?.logs,--retry,chat.outDir);
             });
           }
         },
@@ -446,6 +452,21 @@ FFmpeg command:''';
             logMesaage?.content = lcb.getMessage();
             setState(() {});
           }
+
+
+          Future.delayed(Duration(seconds: 5)).then((a) async {
+            if(chat.isProcessing&&logMesaage!.logs.lastOrNull==lcb.getMessage())
+            try {
+              var fFmpegFailureDetector = FFmpegFailureDetector();
+              fFmpegFailureDetector.analyzeLog( logMesaage!.logs.join("\n"));
+              if(fFmpegFailureDetector.hasError){
+                            _generateAICommand(command, logMesaage?.logs,--retry,chat.outDir);
+                          }
+            } catch (e) {
+              print(e);
+            }
+
+          });
 
 
         },
