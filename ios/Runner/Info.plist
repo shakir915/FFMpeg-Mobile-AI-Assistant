@@ -51,5 +51,15 @@
 	<string>This app needs photo library access to select videos for FFmpeg processing</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>This app needs microphone access to record audio while capturing videos</string>
+
+	<key>LSApplicationQueriesSchemes</key>
+    <array>
+      <string>sms</string>
+      <string>tel</string>
+    </array>
+
+
+
+
 </dict>
 </plist>

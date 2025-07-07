@@ -3,19 +3,25 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/log.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:ffmpeg_kit_flutter_new/session_state.dart';
 import 'package:ffmpeg_kit_flutter_new/statistics.dart';
 import 'package:ffuiflutter/getGeminiApiKey.dart';
+import 'package:ffuiflutter/main.dart';
+import 'package:ffuiflutter/settingsPage.dart';
+import 'package:ffuiflutter/showAppUpdateDialog.dart';
 import 'package:ffuiflutter/utils.dart';
 import 'package:ffuiflutter/words.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'ChatMessage.dart';
 import 'ffFails.dart';
@@ -46,33 +52,118 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
     super.initState();
     downloadBucksBunny();
     loadOldChatsAnd_initializeGemini();
+    try {
+      initRemoteAppSettings().then((version) async {
+
+        try {
+          PackageInfo packageInfo = await PackageInfo.fromPlatform();
+          print("versionversion $version ${packageInfo.buildNumber}");
+          if ((version ?? 0) > int.parse(packageInfo.buildNumber))
+            showAppUpdateDialog(context);
+        } catch (e) {
+          print(e);
+        }
+        setState(() {});
+
+      });
+    } catch (e) {
+      print(e);
+    }
   }
 
+  var scrolledUp = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (scrollToBottomPending) _checkAndScrollToBottom();
+    print("bottom ${MediaQuery.of(context).viewInsets.bottom}");
+    print("bottom ${MediaQuery.of(context).padding.bottom}");
+    if (MediaQuery.of(context).viewInsets.bottom > 50 && !scrolledUp) {
+      () async {
+        await waitForBuildIfPending();
+        if (mounted) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+          scrolledUp = true;
+        }
+      }.call();
+    } else {
+      scrolledUp = false;
+    }
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          editing = null;
+        });
+        FocusScope.of(context).unfocus();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('FFMpeg AI Assistant'),
+          centerTitle: true,
+          actions: [
+            if(pref.getBool("settingsEnabled")==true)
+            InkWell(
+              onTap: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (context) => Settingspage()));
+                if (pref.getBool("data_cleared_restart_required") == true) {
+                  pref.remove("data_cleared_restart_required");
+                  _messages.clear();
+                  _initializeGemini();
+                }
+              },
+              child: Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Icon(Icons.settings, color: Colors.white, size: 25),
+                ),
+              ),
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.all(16),
+                itemCount: _messages.length,
+                itemBuilder: (context, index) {
+                  return _buildMessageBubble(_messages[index]);
+                },
+              ),
+            ),
+
+            if (editing != null) commandInput(editing!) else if (MediaQuery.of(context).viewInsets.bottom < 50 || focus1.hasFocus) _buildChatInput(),
+          ],
+        ),
+      ),
+    );
+  }
 
   Future<void> loadOldChatsAnd_initializeGemini() async {
     try {
       final Directory docDir = await getApplicationDocumentsDirectory();
-      var file = File(docDir.path + "/chatV5.json");
+      var file = File(docDir.path + "/chatV6.json");
       print("_addWelcomeMessage old ${await file.readAsString()}");
 
-    print(file.readAsStringSync());
-    var jsonList = jsonDecode(await file.readAsString());
-    final List<ChatMessage> messages = jsonList
-        .map((json) => ChatMessage.fromJson(json as Map<String, dynamic>))
-        .toList()
-        .cast<ChatMessage>(); // Add this cast
-    messages.forEach((m) => m.isProcessing = false);
-    _messages.addAll(messages);
+      print(file.readAsStringSync());
+      var jsonList = jsonDecode(await file.readAsString());
+      final List<ChatMessage> messages = jsonList
+          .map((json) => ChatMessage.fromJson(json as Map<String, dynamic>))
+          .toList()
+          .cast<ChatMessage>(); // Add this cast
+      messages.forEach((m) => m.isProcessing = false);
+      _messages.addAll(messages);
     } catch (e, s) {
-    print(e);
-    print(s);
+      print(e);
+      print(s);
     }
     _initializeGemini();
   }
 
   Future<void> _initializeGemini() async {
-
-
     try {
       _model = GenerativeModel(model: "gemini-2.0-flash", apiKey: getGeminiApiKey());
       _addMessage(ChatMessage(id: DateTime.now().millisecondsSinceEpoch.toString(), type: MessageType.ai, content: aiInitialized, timestamp: DateTime.now()));
@@ -81,15 +172,13 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
       _addMessage(
         ChatMessage(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
-          type: MessageType.ai,
+          type: MessageType.command,
           content: "⚠️ AI not available. You can still use manual FFmpeg commands.",
           timestamp: DateTime.now(),
         ),
       );
       _initializeGemini();
     }
-
-    getDirectorySizeBytes();
   }
 
   Future<void> _addMessage(ChatMessage message, {dontScrolls = false, save = false}) async {
@@ -102,7 +191,7 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
     try {
       if (_messages.isNotEmpty) {
         final Directory docDir = await getApplicationDocumentsDirectory();
-        File(docDir.path + "/chatV5.json")
+        File(docDir.path + "/chatV6.json")
             .writeAsString(
               jsonEncode(
                 _messages
@@ -113,15 +202,13 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
             )
             .then((a) {
               print("after write : readed ");
-              print(File(docDir.path + "/chatV5.json").readAsStringSync());
+              print(File(docDir.path + "/chatV6.json").readAsStringSync());
             });
       }
     } catch (e, s) {
       print(s);
       print(e);
     }
-
-    getDirectorySizeBytes();
   }
 
   void _scrollToBottom() {
@@ -147,10 +234,10 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
       return;
     }
 
-    await _generateAICommand(text, null,0,null);
+    await _generateAICommand(text, null, 0, null);
   }
 
-  Future<void> _generateAICommand(String userPrompt, List<String>? logs,retry,oldOutDir ) async {
+  Future<void> _generateAICommand(String userPrompt, List<String>? logs, retry, oldOutDir) async {
     FocusScope.of(context).unfocus();
     if (_model == null) {
       _addMessage(
@@ -172,33 +259,25 @@ class _FFmpegChatScreenState extends State<FFmpegChatScreen> {
 
     var outDir = await createNewOutDir();
 
+    List<String> vidInfosAndFilenames = [];
+    await Future.forEach(selectedFiles, (file) async {
+      vidInfosAndFilenames.add(file + "\n" + (await getCompleteVideoInfo(file) ?? ""));
+    });
+
     try {
-      String prompt =
-          '''
-Generate an FFmpeg command based on this request: "$userPrompt"
-
-Rules:
-1. Use input file : \n${selectedFiles.map((file) => '\"$file\"').join('   ')}
-2. use output file directory as \"${outDir}\"
-3. Use appropriate output filename with correct extension
-4. Keep commands concise and practical no explanations needed, only command,  it is for programmatical execution  , don't use /usr/bin/ or bash like thing on start, only the command for ffmpeg required 
-
-
-
-Request: $userPrompt
-FFmpeg command:''';
-
+      var prompt = "";
       if (logs?.isNotEmpty == true) {
-        userPrompt=userPrompt.replaceAll(oldOutDir, outDir);
-        prompt =
-            "got errors on following ffmpeg command "
-            "ffmpeg $userPrompt"
-            "\n\n\n"
-            "errors : \n${logs?.map((l) => '\"$l\"').join('   ')}"
-            "Generate an FFmpeg command based on this commands and logs"
-            "use output file directory as \"${outDir}\""
-            "Keep commands concise and practical no explanations needed, only command,  it is for programmatical execution  , don't use /usr/bin/ or bash like thing on start, only the command for ffmpeg required";
+        prompt = retryPrompt;
+      } else {
+        prompt = initialPrompt;
       }
+
+      prompt = prompt.replaceAll(YOUR_PROMPT_HERE, userPrompt);
+      prompt = prompt.replaceAll(YOUR_FAILED_COMMAND_HERE, userPrompt);
+      prompt = prompt.replaceAll(YOUR_INPUT_FILES_HERE, selectedFiles.map((file) => '\"$file\"').join('   '));
+      prompt = prompt.replaceAll(YOUR_OUTPUT_DIRECTORY_HERE, outDir);
+      prompt = prompt.replaceAll(YOUR_INPUT_FILES_DETAILS_HERE, vidInfosAndFilenames.join("\n\n"));
+      prompt = prompt.replaceAll(YOUR_ERROR_LOGS_HERE, logs?.map((l) => '\"$l\"').join('   ') ?? "");
 
       final content = [Content.text(prompt)];
 
@@ -231,7 +310,7 @@ FFmpeg command:''';
         originals.add(outDir);
         fakes.add("outputDir");
 
-        var msg=ChatMessage(
+        var msg = ChatMessage(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           type: MessageType.command,
           content: generatedCommand,
@@ -241,14 +320,11 @@ FFmpeg command:''';
           pathFakes: fakes,
           pathOriginal: originals,
         );
-        _addMessage(
-          msg ,
-        );
+        _addMessage(msg);
         selectedFiles = [];
-        if(retry>0){
-          _executeFFmpegCommand(msg,--retry);
+        if (retry > 0) {
+          _executeFFmpegCommand(msg, --retry);
         }
-
       }
     } catch (e) {
       setState(() {
@@ -278,6 +354,7 @@ FFmpeg command:''';
         final file = File(result.files.single.path!);
         final fileSize = await file.length();
         final fileSizeInMB = (fileSize / (1024 * 1024)).toStringAsFixed(2);
+        var vidInfo = await getCompleteVideoInfo(file.path!);
 
         setState(() {
           selectedFiles.add(result.files.single.path!);
@@ -289,6 +366,7 @@ FFmpeg command:''';
             type: MessageType.file,
             content: "File selected",
             timestamp: DateTime.now(),
+            vidInfo: vidInfo,
             filePath: result.files.single.path!,
             fileName: result.files.single.name,
             fileSize: "${fileSizeInMB} MB",
@@ -310,6 +388,7 @@ FFmpeg command:''';
         final file = File(pickedFile.path);
         final fileSize = await file.length();
         final fileSizeInMB = (fileSize / (1024 * 1024)).toStringAsFixed(2);
+        var vidInfo = await getCompleteVideoInfo(file.path!);
 
         setState(() {
           selectedFiles.add(pickedFile.path);
@@ -322,6 +401,7 @@ FFmpeg command:''';
             content: "Video captured",
             timestamp: DateTime.now(),
             filePath: pickedFile.path,
+            vidInfo: vidInfo,
             fileName: pickedFile.path.split('/').last,
             fileSize: "${fileSizeInMB} MB",
           ),
@@ -364,7 +444,7 @@ FFmpeg command:''';
     }
   }
 
-  Future<void> _executeFFmpegCommand(ChatMessage chat,retry) async {
+  Future<void> _executeFFmpegCommand(ChatMessage chat, retry) async {
     setState(() {
       editing = null;
     });
@@ -403,8 +483,13 @@ FFmpeg command:''';
       var command = chat.content.trim();
       print("command ${command.startsWith("ffmpeg ")}");
       print("command ${command}");
-      if (command.startsWith("ffmpeg ")) {
+      while (command.startsWith("ffmpeg ") || command.startsWith("ffmpeg\n") || command.startsWith("ffmpeg ")) {
         command = command.replaceFirst("ffmpeg ", "");
+        command = command.trim();
+        command = command.replaceFirst("ffmpeg  ", "");
+        command = command.trim();
+        command = command.replaceFirst("ffmpeg\n", "");
+        command = command.trim();
       }
       chat.pathFakes?.forEach((fake) {
         command = command.replaceAll(fake, chat.pathOriginal![chat.pathFakes!.indexOf(fake)]);
@@ -413,7 +498,13 @@ FFmpeg command:''';
       print("commandcommandcommand pathFakes\n${chat.pathFakes?.join("\n")}");
       print("commandcommandcommand pathOriginal\n${chat.pathOriginal?.join("\n")}");
       print("commandcommandcommand ${command}");
-      var endSession=false;
+      var endSession = false;
+
+      try {
+        await WakelockPlus.enable();
+      } catch (e, s) {
+        print(s);
+      }
       await FFmpegKit.executeAsync(
         command,
         (session) async {
@@ -430,8 +521,13 @@ FFmpeg command:''';
           } else if (await session.getState() == SessionState.completed || await session.getState() == SessionState.failed) {
             chat.isProcessing = false;
             Future.delayed(Duration(seconds: 1)).then((a) async {
-              _generateAICommand(command, logMesaage?.logs,--retry,chat.outDir);
+              _generateAICommand(command, logMesaage?.logs, --retry, chat.outDir);
             });
+          }
+          try {
+            await WakelockPlus.disable();
+          } catch (e, s) {
+            print(s);
           }
         },
         (Log lcb) {
@@ -453,22 +549,23 @@ FFmpeg command:''';
             setState(() {});
           }
 
-
           Future.delayed(Duration(seconds: 5)).then((a) async {
-            if(chat.isProcessing&&logMesaage!.logs.lastOrNull==lcb.getMessage())
-            try {
-              var fFmpegFailureDetector = FFmpegFailureDetector();
-              fFmpegFailureDetector.analyzeLog( logMesaage!.logs.join("\n"));
-              if(fFmpegFailureDetector.hasError){
-                            _generateAICommand(command, logMesaage?.logs,--retry,chat.outDir);
-                          }
-            } catch (e) {
-              print(e);
-            }
-
+            if (chat.isProcessing && logMesaage!.logs.lastOrNull == lcb.getMessage())
+              try {
+                var fFmpegFailureDetector = FFmpegFailureDetector();
+                fFmpegFailureDetector.analyzeLog(logMesaage!.logs.join("\n"));
+                if (fFmpegFailureDetector.hasError || fFmpegFailureDetector.isStuckDuplicatingFrames) {
+                  try {
+                    await WakelockPlus.disable();
+                  } catch (e, s) {
+                    print(s);
+                  }
+                  _generateAICommand(command, logMesaage?.logs, --retry, chat.outDir);
+                }
+              } catch (e) {
+                print(e);
+              }
           });
-
-
         },
         (Statistics statistics) {
           print("statistics statistics statistics ${statistics}");
@@ -537,73 +634,6 @@ FFmpeg command:''';
         ChatMessage(id: DateTime.now().millisecondsSinceEpoch.toString(), type: MessageType.ai, content: "Error sharing file: $e", timestamp: DateTime.now()),
       );
     }
-  }
-
-  var scrolledUp = false;
-
-  @override
-  Widget build(BuildContext context) {
-    if (scrollToBottomPending) _checkAndScrollToBottom();
-    print("bottom ${MediaQuery.of(context).viewInsets.bottom}");
-    print("bottom ${MediaQuery.of(context).padding.bottom}");
-    if (MediaQuery.of(context).viewInsets.bottom > 50 && !scrolledUp) {
-      () async {
-        await waitForBuildIfPending();
-        if (mounted) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-          scrolledUp = true;
-        }
-      }.call();
-    } else {
-      scrolledUp = false;
-    }
-
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          editing = null;
-        });
-        FocusScope.of(context).unfocus();
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('FFMpeg AI Assistant'),
-          centerTitle: true,
-          actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 8.0),
-              child: TextButton.icon(
-                onPressed: () {
-                  deleteDialog();
-                },
-                icon: const Icon(Icons.delete_outline, color: Colors.red, size: 25),
-                label: Text(
-                  totalSizeOfDir > (10 * 1000 * 1000) ? '${formatBytes(totalSizeOfDir)}' : "",
-                  style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.w500),
-                ),
-                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: const Size(60, 32)),
-              ),
-            ),
-          ],
-        ),
-        body: Column(
-          children: [
-            Expanded(
-              child: ListView.builder(
-                controller: _scrollController,
-                padding: const EdgeInsets.all(16),
-                itemCount: _messages.length,
-                itemBuilder: (context, index) {
-                  return _buildMessageBubble(_messages[index]);
-                },
-              ),
-            ),
-
-            if (editing != null) commandInput(editing!) else if (MediaQuery.of(context).viewInsets.bottom < 50 || focus1.hasFocus) _buildChatInput(),
-          ],
-        ),
-      ),
-    );
   }
 
   Widget _buildMessageBubble(ChatMessage message) {
@@ -859,7 +889,7 @@ FFmpeg command:''';
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: message.isProcessing ? null : () => _executeFFmpegCommand(message,3),
+                      onPressed: message.isProcessing ? null : () => _executeFFmpegCommand(message, 3),
                       icon: message.isProcessing
                           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Icon(Icons.play_arrow, color: Colors.white),
@@ -921,7 +951,7 @@ FFmpeg command:''';
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: message.isProcessing ? null : () => _executeFFmpegCommand(message,3),
+                      onPressed: message.isProcessing ? null : () => _executeFFmpegCommand(message, 3),
                       icon: message.isProcessing
                           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Icon(Icons.play_arrow, color: Colors.white),
@@ -1059,146 +1089,6 @@ FFmpeg command:''';
     super.dispose();
   }
 
-  var totalSizeOfDir = 0;
-
-  Future<int> getDirectorySizeBytes() async {
-    final Directory directory = await getApplicationDocumentsDirectory();
-    int totalSize = 0;
-
-    try {
-      await for (FileSystemEntity entity in directory.list(recursive: true)) {
-        if (entity is File) {
-          try {
-            totalSize += await entity.length();
-          } catch (e) {
-            print('Error reading file ${entity.path}: $e');
-          }
-        }
-      }
-    } catch (e) {
-      print('Error reading directory ${directory.path}: $e');
-    }
-    print("totalSize ${totalSize / (1000 * 1000)} mb");
-    if (totalSizeOfDir != totalSize) {
-      totalSizeOfDir = totalSize;
-      setState(() {});
-    }
-    return totalSize;
-  }
-
-  String formatBytes(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
-  }
-
-  void deleteDialog() {
-    if (!mounted) return;
-
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: Colors.grey[900],
-          title: Row(
-            children: [
-              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
-              SizedBox(width: 12),
-              Text(
-                'Clear All Data',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'This will permanently delete:',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
-              ),
-              SizedBox(height: 12),
-              Row(
-                children: [
-                  Icon(Icons.chat_bubble_outline, color: Colors.blue, size: 20),
-                  SizedBox(width: 8),
-                  Text('All chat messages', style: TextStyle(color: Colors.grey[300])),
-                ],
-              ),
-              SizedBox(height: 8),
-              Row(
-                children: [
-                  Icon(Icons.folder_outlined, color: Colors.green, size: 20),
-                  SizedBox(width: 8),
-                  Text('All processed media files', style: TextStyle(color: Colors.grey[300])),
-                ],
-              ),
-              SizedBox(height: 8),
-              Row(
-                children: [
-                  Icon(Icons.storage_outlined, color: Colors.orange, size: 20),
-                  SizedBox(width: 8),
-                  Text('${formatBytes(totalSizeOfDir)} of app storage ', style: TextStyle(color: Colors.grey[300])),
-                ],
-              ),
-              SizedBox(height: 16),
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.red.withOpacity(0.3)),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, color: Colors.red, size: 20),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'This action cannot be undone!',
-                        style: TextStyle(color: Colors.red, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel', style: TextStyle(color: Colors.grey[400])),
-            ),
-            ElevatedButton.icon(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                try {
-                  final Directory directory = await getApplicationDocumentsDirectory();
-                  await for (FileSystemEntity entity in directory.list()) {
-                    if (entity is Directory) {
-                      await entity.delete(recursive: true);
-                    } else if (entity is File) {
-                      await entity.delete();
-                    }
-                  }
-                } catch (e) {
-                  print('Error deleting directory contents: $e');
-                }
-                _messages.clear();
-                _initializeGemini();
-              },
-              icon: Icon(Icons.delete_forever, size: 18),
-              label: Text('Delete All'),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   Future<void> _checkAndScrollToBottom() async {
     await waitForBuildIfPending();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1218,7 +1108,7 @@ FFmpeg command:''';
         final file = File(pickedFile.path);
         final fileSize = await file.length();
         final fileSizeInMB = (fileSize / (1024 * 1024)).toStringAsFixed(2);
-
+        var vidInfo = await getCompleteVideoInfo(file.path!);
         setState(() {
           selectedFiles.add(pickedFile.path);
         });
@@ -1230,6 +1120,7 @@ FFmpeg command:''';
             content: "Video selected from gallery",
             timestamp: DateTime.now(),
             filePath: pickedFile.path,
+            vidInfo: vidInfo,
             fileName: pickedFile.path.split('/').last,
             fileSize: "${fileSizeInMB} MB",
           ),
@@ -1284,7 +1175,7 @@ FFmpeg command:''';
         final file = File(result.files.single.path!);
         final fileSize = await file.length();
         final fileSizeInMB = (fileSize / (1024 * 1024)).toStringAsFixed(2);
-
+        var vidInfo = await getCompleteVideoInfo(result.files.single.path!);
         setState(() {
           selectedFiles.add(result.files.single.path!);
         });
@@ -1297,6 +1188,7 @@ FFmpeg command:''';
             timestamp: DateTime.now(),
             filePath: result.files.single.path!,
             fileName: result.files.single.name,
+            vidInfo: vidInfo,
             fileSize: "${fileSizeInMB} MB",
           ),
         );
@@ -1344,5 +1236,38 @@ FFmpeg command:''';
     //
     //   print("DioDioDioDioDio");
     // }.call();
+  }
+
+  Future<String?> getVideoDuration(filePath) async {
+    var command = "-v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"$filePath\"";
+
+    var session = await FFprobeKit.execute(command);
+
+    if (ReturnCode.isSuccess(await session.getReturnCode())) {
+      var output = await session.getOutput();
+      var durationString = output?.trim();
+
+      if (durationString != null && durationString.isNotEmpty) {
+        return durationString;
+      }
+    }
+  }
+
+  Future<String?> getCompleteVideoInfo(String filePath) async {
+    try {
+      var command = "-v quiet -print_format default -show_format -show_streams \"$filePath\"";
+
+      var session = await FFprobeKit.execute(command);
+
+      if (ReturnCode.isSuccess(await session.getReturnCode())) {
+        var output = await session.getOutput();
+        return output;
+      }
+
+      return null;
+    } catch (e) {
+      print('Error getting video info: $e');
+      return null;
+    }
   }
 }

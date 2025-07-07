@@ -9,6 +9,7 @@ class ChatMessage {
   final String? fileName;
   final String? fileSize;
   final String? thumbnail;
+  final String? vidInfo;
   final bool isEditable;
   bool isProcessing;
   String? outDir;
@@ -32,6 +33,7 @@ class ChatMessage {
     this.outDir,
     this.pathOriginal,
     this.pathFakes,
+    this.vidInfo,
 
     this.logs = const [],
 
@@ -58,12 +60,37 @@ class ChatMessage {
       'logs': logs,
       'pathOriginal': pathOriginal,
       'pathFakes': pathFakes,
+      'vidInfo': vidInfo,
       // You might want to store the path as a string if needed
     };
   }
 
   // Create ChatMessage from JSON
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
+
+   List<String>  pathOriginal=[];
+   try {
+     pathOriginal=json.containsKey('pathOriginal') ? (json['pathOriginal'] as List<dynamic>).cast<String>() : [];
+   } catch (e, s) {
+     print(s);
+   }
+
+   List<String>  pathFakes=[];
+   try {
+     pathFakes=json.containsKey('pathFakes') ? (json['pathFakes'] as List<dynamic>).cast<String>() : [];
+   } catch (e, s) {
+     print(s);
+   }
+
+   List<String>  logs=[];
+   try {
+     logs=json.containsKey('logs') ? (json['logs'] as List<dynamic>).cast<String>() : [];
+   } catch (e, s) {
+     print(s);
+   }
+
+
+
     return ChatMessage(
       id: json['id'] as String,
       type: _parseMessageType(json['type'] as String),
@@ -74,12 +101,13 @@ class ChatMessage {
       fileSize: json['fileSize'] as String?,
       outDir: json['outDir'] as String?,
       thumbnail: json['thumbnail'] as String?,
+      vidInfo: json['vidInfo'] as String?,
 
       isEditable: json['isEditable'] as bool? ?? false,
       isProcessing: json['isProcessing'] as bool? ?? false,
-      logs: json.containsKey('logs') ? (json['logs'] as List<dynamic>).cast<String>() : [],
-      pathOriginal: json.containsKey('pathOriginal') ? (json['pathOriginal'] as List<dynamic>).cast<String>() : [],
-      pathFakes: json.containsKey('pathFakes') ? (json['pathFakes'] as List<dynamic>).cast<String>() : [],
+      logs: logs,
+      pathOriginal: pathOriginal,
+      pathFakes: pathFakes,
 
     );
   }

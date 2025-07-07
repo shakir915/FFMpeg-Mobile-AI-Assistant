@@ -3,9 +3,14 @@ class FFmpegFailureDetector {
   List<String> errorLogs = [];
   bool hasError = false;
   String? failureReason;
+  var isStuckDuplicatingFrames=false;
 
   void analyzeLog(String logMessage) {
     String lowerLog = logMessage.toLowerCase();
+
+    if(_isStuckDuplicatingFrames(logMessage)){
+      isStuckDuplicatingFrames=true;
+    }
 
     // Critical error patterns
     List<String> criticalErrors = [
@@ -74,9 +79,19 @@ class FFmpegFailureDetector {
     if (hasProgress) {
       print("✅ PROGRESS: Command is working");
     }
+
+
   }
 
   bool isFailure() => hasError;
   String? getFailureReason() => failureReason;
   List<String> getErrorLogs() => errorLogs;
+
+  bool _isStuckDuplicatingFrames(String logOutput) {
+    return logOutput.contains('More than 1000 frames duplicated') ||
+        logOutput.contains('frames duplicated');
+  }
+
+
+
 }
